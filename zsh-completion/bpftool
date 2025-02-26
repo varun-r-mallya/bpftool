@@ -1,0 +1,654 @@
+# bpftool(8) completion for zsh
+#
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+#
+# Author: Varun R Mallya <varunrmallya@gmail.com>
+
+# Takes a list of words in argument; each one of them is added to COMPREPLY if
+# it is not already present on the command line. Returns no value.
+_bpftool_once_attr() {
+    local w idx found
+    for w in $*; do
+        found=0
+        for (( idx=3; idx < ${#words}-1; idx++ )); do
+            if [[ $w == ${words[idx]} ]]; then
+                found=1
+                break
+            fi
+        done
+        [[ $found -eq 0 ]] && \
+            compadd -Q -- "$w"
+    done
+}
+
+# Takes a list of words as argument; if any of those words is present on the
+# command line, return 0. Otherwise, return 1.
+_bpftool_search_list() {
+    local w idx
+    for w in $*; do
+        for (( idx=3; idx < ${#words}-1; idx++ )); do
+            [[ $w == ${words[idx]} ]] && return 0
+        done
+    done
+    return 1
+}
+
+# Takes a list of words in argument; adds them all to COMPREPLY if none of them
+# is already present on the command line. Returns no value.
+_bpftool_one_of_list() {
+    _bpftool_search_list $* && return 1
+    compadd -Q -- $*
+}
+
+_bpftool_get_map_ids() {
+    compadd -Q -- $( bpftool -jp map  2>&1 | \
+        sed -n 's/.*"id": \(.*\),$/\1/p' )
+}
+
+# Takes map type and adds matching map ids to the list of suggestions.
+_bpftool_get_map_ids_for_type() {
+    local type="$1"
+    compadd -Q -- $( bpftool -jp map  2>&1 | \
+        grep -C2 "$type" | \
+        sed -n 's/.*"id": \(.*\),$/\1/p' )
+}
+
+_bpftool_get_map_names() {
+    compadd -Q -- $( bpftool -jp map  2>&1 | \
+        sed -n 's/.*"name": \(.*\),$/\1/p' )
+}
+
+# Takes map type and adds matching map names to the list of suggestions.
+_bpftool_get_map_names_for_type() {
+    local type="$1"
+    compadd -Q -- $( bpftool -jp map  2>&1 | \
+        grep -C2 "$type" | \
+        sed -n 's/.*"name": \(.*\),$/\1/p' )
+}
+
+_bpftool_get_prog_ids() {
+    compadd -Q -- $( bpftool -jp prog 2>&1 | \
+        sed -n 's/.*"id": \(.*\),$/\1/p' )
+}
+
+_bpftool_get_prog_tags() {
+    compadd -Q -- $( bpftool -jp prog 2>&1 | \
+        sed -n 's/.*"tag": "\(.*\)",$/\1/p' )
+}
+
+_bpftool_get_prog_names() {
+    compadd -Q -- $( bpftool -jp prog 2>&1 | \
+        sed -n 's/.*"name": "\(.*\)",$/\1/p' )
+}
+
+_bpftool_get_btf_ids() {
+    compadd -Q -- $( bpftool -jp btf 2>&1 | \
+        sed -n 's/.*"id": \(.*\),$/\1/p' )
+}
+
+_bpftool_get_link_ids() {
+    compadd -Q -- $( bpftool -jp link 2>&1 | \
+        sed -n 's/.*"id": \(.*\),$/\1/p' )
+}
+
+_bpftool_get_obj_map_names() {
+    local obj maps
+
+    obj=$1
+
+    maps=$(objdump -j .maps -t $obj 2>/dev/null | \
+        awk '/g     . .maps/ {print $NF}')
+
+    compadd -Q -- $maps
+}
+
+_bpftool_get_obj_map_idxs() {
+    local obj nmaps
+
+    obj=$1
+
+    nmaps=$(objdump -j maps -t $obj 2>/dev/null | grep -c 'g     . maps')
+
+    compadd -Q -- $(seq 0 $((nmaps - 1)))
+}
+
+_sysfs_get_netdevs() {
+    compadd -Q -- $( ls /sys/class/net 2>/dev/null )
+}
+
+# Retrieve type of the map that we are operating on.
+_bpftool_map_guess_map_type() {
+    local keyword idx ref=""
+    for (( idx=3; idx < ${#words}-1; idx++ )); do
+        case "${words[$((idx-2))]}" in
+            lookup|update)
+                keyword=${words[$((idx-1))]}
+                ref=${words[$((idx))]}
+                ;;
+            push)
+                print "stack"
+                return 0
+                ;;
+            enqueue)
+                print "queue"
+                return 0
+                ;;
+        esac
+    done
+    [[ -z $ref ]] && return 0
+
+    local type
+    type=$(bpftool -jp map show $keyword $ref | \
+        sed -n 's/.*"type": "\(.*\)",$/\1/p')
+    [[ -n $type ]] && print $type
+}
+
+_bpftool_map_update_get_id() {
+    local command="$1"
+
+    # Is it the map to update, or a map to insert into the map to update?
+    # Search for "value" keyword.
+    local idx value
+    for (( idx=7; idx < ${#words}-1; idx++ )); do
+        if [[ ${words[idx]} == "value" ]]; then
+            value=1
+            break
+        fi
+    done
+    if [[ $value -eq 0 ]]; then
+        case "$command" in
+            push)
+                _bpftool_get_map_ids_for_type stack
+                ;;
+            enqueue)
+                _bpftool_get_map_ids_for_type queue
+                ;;
+            *)
+                _bpftool_get_map_ids
+                ;;
+        esac
+        return 0
+    fi
+
+    # Id to complete is for a value. It can be either prog id or map id. This
+    # depends on the type of the map to update.
+    local type=$(_bpftool_map_guess_map_type)
+    case $type in
+        array_of_maps|hash_of_maps)
+            _bpftool_get_map_ids
+            return 0
+            ;;
+        prog_array)
+            _bpftool_get_prog_ids
+            return 0
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+_bpftool_map_update_get_name() {
+    local command="$1"
+
+    # Is it the map to update, or a map to insert into the map to update?
+    # Search for "value" keyword.
+    local idx value
+    for (( idx=7; idx < ${#words}-1; idx++ )); do
+        if [[ ${words[idx]} == "value" ]]; then
+            value=1
+            break
+        fi
+    done
+    if [[ $value -eq 0 ]]; then
+        case "$command" in
+            push)
+                _bpftool_get_map_names_for_type stack
+                ;;
+            enqueue)
+                _bpftool_get_map_names_for_type queue
+                ;;
+            *)
+                _bpftool_get_map_names
+                ;;
+        esac
+        return 0
+    fi
+
+    # Name to complete is for a value. It can be either prog name or map name. This
+    # depends on the type of the map to update.
+    local type=$(_bpftool_map_guess_map_type)
+    case $type in
+        array_of_maps|hash_of_maps)
+            _bpftool_get_map_names
+            return 0
+            ;;
+        prog_array)
+            _bpftool_get_prog_names
+            return 0
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+_bpftool() {
+    local curcontext="$curcontext" state line
+    typeset -A opt_args
+
+    _arguments -C \
+        '--version[show version]' \
+        '--json[output in JSON format]' \
+        '--pretty[pretty-print JSON output]' \
+        '--bpffs[use BPF filesystem]' \
+        '--mapcompat[enable map compatibility mode]' \
+        '--debug[enable debug mode]' \
+        '--use-loader[use loader]' \
+        '--base-btf[use base BTF]:base BTF file:_files' \
+        '1: :->object' \
+        '2: :->command' \
+        '*: :->args'
+
+    case $state in
+        (object)
+            local -a objects
+            objects=(
+                'prog:BPF program'
+                'map:BPF map'
+                'btf:BPF Type Format'
+                'gen:BPF object generation'
+                'cgroup:cgroup'
+                'perf:perf event'
+                'net:network'
+                'feature:feature'
+                'link:link'
+            )
+            _describe -t objects 'object' objects
+            ;;
+        (command)
+            case $line[1] in
+                (prog)
+                    local -a prog_commands
+                    prog_commands=(
+                        'show:show BPF program'
+                        'list:list BPF programs'
+                        'dump:dump BPF program'
+                        'pin:pin BPF program'
+                        'attach:attach BPF program'
+                        'detach:detach BPF program'
+                        'load:load BPF program'
+                        'loadall:load all BPF programs'
+                        'tracelog:show BPF program tracelog'
+                        'profile:profile BPF program'
+                        'run:run BPF program'
+                    )
+                    _describe -t prog_commands 'command' prog_commands
+                    ;;
+                (map)
+                    local -a map_commands
+                    map_commands=(
+                        'show:show BPF map'
+                        'list:list BPF maps'
+                        'dump:dump BPF map'
+                        'peek:peek BPF map'
+                        'pop:pop BPF map'
+                        'dequeue:dequeue BPF map'
+                        'freeze:freeze BPF map'
+                        'create:create BPF map'
+                        'lookup:lookup BPF map'
+                        'getnext:get next BPF map'
+                        'delete:delete BPF map'
+                        'update:update BPF map'
+                        'push:push BPF map'
+                        'enqueue:enqueue BPF map'
+                        'pin:pin BPF map'
+                        'event_pipe:event pipe BPF map'
+                    )
+                    _describe -t map_commands 'command' map_commands
+                    ;;
+                (btf)
+                    local -a btf_commands
+                    btf_commands=(
+                        'dump:dump BTF'
+                        'show:show BTF'
+                        'list:list BTF'
+                    )
+                    _describe -t btf_commands 'command' btf_commands
+                    ;;
+                (gen)
+                    local -a gen_commands
+                    gen_commands=(
+                        'object:generate BPF object'
+                        'skeleton:generate BPF skeleton'
+                        'subskeleton:generate BPF subskeleton'
+                        'min_core_btf:generate minimal core BTF'
+                    )
+                    _describe -t gen_commands 'command' gen_commands
+                    ;;
+                (cgroup)
+                    local -a cgroup_commands
+                    cgroup_commands=(
+                        'show:show cgroup'
+                        'list:list cgroups'
+                        'tree:show cgroup tree'
+                        'attach:attach cgroup'
+                        'detach:detach cgroup'
+                    )
+                    _describe -t cgroup_commands 'command' cgroup_commands
+                    ;;
+                (perf)
+                    local -a perf_commands
+                    perf_commands=(
+                        'show:show perf event'
+                        'list:list perf events'
+                    )
+                    _describe -t perf_commands 'command' perf_commands
+                    ;;
+                (net)
+                    local -a net_commands
+                    net_commands=(
+                        'show:show network'
+                        'list:list network'
+                        'attach:attach network'
+                        'detach:detach network'
+                    )
+                    _describe -t net_commands 'command' net_commands
+                    ;;
+                (feature)
+                    local -a feature_commands
+                    feature_commands=(
+                        'probe:probe feature'
+                        'list_builtins:list builtins'
+                    )
+                    _describe -t feature_commands 'command' feature_commands
+                    ;;
+                (link)
+                    local -a link_commands
+                    link_commands=(
+                        'show:show link'
+                        'list:list links'
+                        'pin:pin link'
+                        'detach:detach link'
+                    )
+                    _describe -t link_commands 'command' link_commands
+                    ;;
+            esac
+            ;;
+        (args)
+            case $line[1] in
+                (prog)
+                    case $line[2] in
+                        (show|list)
+                            _bpftool_get_prog_ids
+                            _bpftool_get_prog_names
+                            ;;
+                        (dump)
+                            _arguments \
+                                '1: :->prog_dump_type'
+                            case $state in
+                                (prog_dump_type)
+                                    _values 'prog_dump_type' 'xlated' 'jited'
+                                    ;;
+                            esac
+                            ;;
+                        (pin)
+                            _arguments \
+                                '1: :->prog_pin_type'
+                            case $state in
+                                (prog_pin_type)
+                                    _values 'prog_pin_type' 'id' 'name' 'pinned'
+                                    ;;
+                            esac
+                            ;;
+                        (attach|detach)
+                            _arguments \
+                                '1: :->prog_attach_type'
+                            case $state in
+                                (prog_attach_type)
+                                    _values 'prog_attach_type' 'id' 'name' 'pinned'
+                                    ;;
+                            esac
+                            ;;
+                        (load|loadall)
+                            _arguments \
+                                '1: :->prog_load_type'
+                            case $state in
+                                (prog_load_type)
+                                    _values 'prog_load_type' 'file' 'type' 'map' 'pinmaps' 'autoattach' 'offload_dev' 'xdpmeta_dev'
+                                    ;;
+                            esac
+                            ;;
+                        (tracelog)
+                            _arguments \
+                                '1: :->prog_tracelog_type'
+                            case $state in
+                                (prog_tracelog_type)
+                                    _values 'prog_tracelog_type' 'id' 'name' 'pinned'
+                                    ;;
+                            esac
+                            ;;
+                        (profile)
+                            _arguments \
+                                '1: :->prog_profile_type'
+                            case $state in
+                                (prog_profile_type)
+                                    _values 'prog_profile_type' 'id' 'name' 'pinned'
+                                    ;;
+                            esac
+                            ;;
+                        (run)
+                            _arguments \
+                                '1: :->prog_run_type'
+                            case $state in
+                                (prog_run_type)
+                                    _values 'prog_run_type' 'id' 'name' 'pinned'
+                                    ;;
+                            esac
+                            ;;
+                    esac
+                    ;;
+                (map)
+                    case $line[2] in
+                        (show|list|dump|peek|pop|dequeue|freeze)
+                            _bpftool_get_map_ids
+                            _bpftool_get_map_names
+                            ;;
+                        (create)
+                            _arguments \
+                                '1: :->map_create_type'
+                            case $state in
+                                (map_create_type)
+                                    _values 'map_create_type' 'type' 'key' 'value' 'entries' 'name' 'flags' 'offload_dev' 'inner_map'
+                                    ;;
+                            esac
+                            ;;
+                        (lookup|getnext|delete)
+                            _arguments \
+                                '1: :->map_lookup_type'
+                            case $state in
+                                (map_lookup_type)
+                                    _values 'map_lookup_type' 'id' 'name' 'key' 'value'
+                                    ;;
+                            esac
+                            ;;
+                        (update|push|enqueue)
+                            _arguments \
+                                '1: :->map_update_type'
+                            case $state in
+                                (map_update_type)
+                                    _values 'map_update_type' 'id' 'name' 'key' 'value'
+                                    ;;
+                            esac
+                            ;;
+                        (pin)
+                            _arguments \
+                                '1: :->map_pin_type'
+                            case $state in
+                                (map_pin_type)
+                                    _values 'map_pin_type' 'id' 'name'
+                                    ;;
+                            esac
+                            ;;
+                        (event_pipe)
+                            _arguments \
+                                '1: :->map_event_pipe_type'
+                            case $state in
+                                (map_event_pipe_type)
+                                    _values 'map_event_pipe_type' 'id' 'name' 'cpu' 'index'
+                                    ;;
+                            esac
+                            ;;
+                    esac
+                    ;;
+                (btf)
+                    case $line[2] in
+                        (dump)
+                            _arguments \
+                                '1: :->btf_dump_type'
+                            case $state in
+                                (btf_dump_type)
+                                    _values 'btf_dump_type' 'id' 'map' 'prog' 'file'
+                                    ;;
+                            esac
+                            ;;
+                        (show|list)
+                            _arguments \
+                                '1: :->btf_show_type'
+                            case $state in
+                                (btf_show_type)
+                                    _values 'btf_show_type' 'id'
+                                    ;;
+                            esac
+                            ;;
+                    esac
+                    ;;
+                (gen)
+                    case $line[2] in
+                        (object)
+                            _arguments \
+                                '1: :->gen_object_type'
+                            case $state in
+                                (gen_object_type)
+                                    _values 'gen_object_type' 'file'
+                                    ;;
+                            esac
+                            ;;
+                        (skeleton|subskeleton)
+                            _arguments \
+                                '1: :->gen_skeleton_type'
+                            case $state in
+                                (gen_skeleton_type)
+                                    _values 'gen_skeleton_type' 'file' 'name'
+                                    ;;
+                            esac
+                            ;;
+                        (min_core_btf)
+                            _arguments \
+                                '1: :->gen_min_core_btf_type'
+                            case $state in
+                                (gen_min_core_btf_type)
+                                    _values 'gen_min_core_btf_type' 'file'
+                                    ;;
+                            esac
+                            ;;
+                    esac
+                    ;;
+                (cgroup)
+                    case $line[2] in
+                        (show|list|tree)
+                            _arguments \
+                                '1: :->cgroup_show_type'
+                            case $state in
+                                (cgroup_show_type)
+                                    _values 'cgroup_show_type' 'file' 'effective'
+                                    ;;
+                            esac
+                            ;;
+                        (attach|detach)
+                            _arguments \
+                                '1: :->cgroup_attach_type'
+                            case $state in
+                                (cgroup_attach_type)
+                                    _values 'cgroup_attach_type' 'id' 'name' 'pinned'
+                                    ;;
+                            esac
+                            ;;
+                    esac
+                    ;;
+                (perf)
+                    case $line[2] in
+                        (show|list)
+                            _arguments \
+                                '1: :->perf_show_type'
+                            case $state in
+                                (perf_show_type)
+                                    _values 'perf_show_type' 'id'
+                                    ;;
+                            esac
+                            ;;
+                    esac
+                    ;;
+                (net)
+                    case $line[2] in
+                        (show|list)
+                            _arguments \
+                                '1: :->net_show_type'
+                            case $state in
+                                (net_show_type)
+                                    _values 'net_show_type' 'dev'
+                                    ;;
+                            esac
+                            ;;
+                        (attach|detach)
+                            _arguments \
+                                '1: :->net_attach_type'
+                            case $state in
+                                (net_attach_type)
+                                    _values 'net_attach_type' 'xdp' 'xdpgeneric' 'xdpdrv' 'xdpoffload' 'tcx_ingress' 'tcx_egress'
+                                    ;;
+                            esac
+                            ;;
+                    esac
+                    ;;
+                (feature)
+                    case $line[2] in
+                        (probe)
+                            _arguments \
+                                '1: :->feature_probe_type'
+                            case $state in
+                                (feature_probe_type)
+                                    _values 'feature_probe_type' 'macros' 'prefix' 'kernel' 'dev' 'full' 'unprivileged'
+                                    ;;
+                            esac
+                            ;;
+                        (list_builtins)
+                            _arguments \
+                                '1: :->feature_list_builtins_type'
+                            case $state in
+                                (feature_list_builtins_type)
+                                    _values 'feature_list_builtins_type' 'prog_types' 'map_types' 'attach_types' 'link_types' 'helpers'
+                                    ;;
+                            esac
+                            ;;
+                    esac
+                    ;;
+                (link)
+                    case $line[2] in
+                        (show|list|pin|detach)
+                            _arguments \
+                                '1: :->link_show_type'
+                            case $state in
+                                (link_show_type)
+                                    _values 'link_show_type' 'id' 'pinned'
+                                    ;;
+                            esac
+                            ;;
+                    esac
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_bpftool "$@"
