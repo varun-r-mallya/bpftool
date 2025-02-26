@@ -67,6 +67,7 @@ $(LIBBPF_BOOTSTRAP)-clean: FORCE | $(LIBBPF_BOOTSTRAP_OUTPUT)
 
 prefix ?= /usr/local
 bash_compdir ?= /usr/share/bash-completion/completions
+zsh_compdir ?= /usr/share/zsh/site-functions
 
 CFLAGS += -O2
 CFLAGS += -W -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
@@ -274,6 +275,8 @@ install-bin: $(OUTPUT)bpftool
 install: install-bin
 	$(Q)$(INSTALL) -m 0755 -d $(DESTDIR)$(bash_compdir)
 	$(Q)$(INSTALL) -m 0644 $(srctree)/bash-completion/bpftool $(DESTDIR)$(bash_compdir)
+	$(Q)$(INSTALL) -m 0755 -d $(DESTDIR)$(zsh_compdir)
+	$(Q)$(INSTALL) -m 0644 $(srctree)/zsh-completion/_bpftool $(DESTDIR)$(zsh_compdir)
 
 uninstall:
 	$(call QUIET_UNINST, bpftool)
